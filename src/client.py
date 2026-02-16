@@ -65,6 +65,15 @@ DEFAULT_TIMEOUT_SECONDS = 30
 MAX_REQUEST_BODY_SIZE = 1_000_000
 
 
+def _get_version() -> str:
+    """Get the package version."""
+    try:
+        from . import __version__
+        return __version__
+    except ImportError:
+        return "unknown"
+
+
 @dataclass
 class PolicyResponse:
     """
@@ -298,6 +307,7 @@ class Stage0Client:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "x-api-key": self.api_key,
+            "User-Agent": f"stage0-execution-guard/{_get_version()}",
         }
         
         request = urllib.request.Request(
