@@ -3,6 +3,13 @@ Stage0 Execution Guard Skill - API Client
 
 This module provides the HTTP client for communicating with the Stage0 API.
 It handles authentication, request formatting, and response parsing.
+
+API Behavior:
+- HIGH severity issues → DENY (enforced by API)
+- MEDIUM severity issues → DENY only with pro=true, otherwise ALLOW
+- DEFER verdict for low-value/under-specified tasks
+- Free tier provides full DENY functionality for HIGH severity issues
+- Pro plan unlocks MEDIUM severity DENY and advanced features
 """
 
 from __future__ import annotations
@@ -11,10 +18,12 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .errors import (
     InvalidApiKeyError,
+    ProPlanRequiredError,
     QuotaExceededError,
     RateLimitedError,
     Stage0ConnectionError,
@@ -31,6 +40,114 @@ DEFAULT_TIMEOUT_SECONDS = 30
 MAX_REQUEST_BODY_SIZE = 1_000_000
 
 
+@dataclass
+class PolicyResponse:
+    """
+    Structured response from Stage0 policy check.
+    
+    This class wraps the raw API response and provides convenient
+    methods for accessing common fields.
+    """
+    
+    verdict: str  # ALLOW, DENY, or DEFER
+    reason: str
+    raw_response: Dict[str, Any] = field(default_factory=dict)
+    risk_score: int = 0
+    issues: List[Dict[str, Any]] = field(default_factory=list)
+    clarifying_questions: List[str] = field(default_factory=list)
+    constraints_applied: List[str] = field(default_factory=list)
+    cached: bool = False
+    request_id: Optional[str] = None
+    
+    def __post_init__(self) -> None:
+        """Normalize verdict to uppercase."""
+        self.verdict = self.verdict.upper()
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PolicyResponse":
+        """
+        Parse policy response from API response dictionary.
+        
+        Args:
+            data: Raw API response dictionary.
+        
+        Returns:
+            Parsed PolicyResponse instance.
+        """
+        verdict_str = str(data.get("verdict", "DENY")).upper()
+        
+        # Handle invalid verdict values gracefully (fail-safe)
+        if verdict_str not in ("ALLOW", "DENY", "DEFER"):
+            verdict_str = "DENY"
+        
+        # Parse issues list
+        issues = data.get("issues") or []
+        if not isinstance(issues, list):
+            issues = []
+        
+        # Parse clarifying questions
+        questions = data.get("clarifying_questions") or []
+        if not isinstance(questions, list):
+            questions = []
+        
+        # Parse constraints
+        constraints = data.get("constraints_applied") or data.get("guardrails") or []
+        if not isinstance(constraints, list):
+            constraints = []
+        
+        # Build reason from issues if not provided
+        reason = data.get("reason") or data.get("decision") or ""
+        if not reason and issues:
+            issue_messages = [
+                f"{i.get('code', 'UNKNOWN')}: {i.get('message', '')}"
+                for i in issues
+                if isinstance(i, dict)
+            ]
+            reason = "; ".join(issue_messages) if issue_messages else "No reason provided"
+        elif not reason:
+            reason = "No reason provided"
+        
+        return cls(
+            verdict=verdict_str,
+            reason=reason,
+            raw_response=data,
+            risk_score=int(data.get("risk_score", 0)),
+            issues=issues,
+            clarifying_questions=[str(q) for q in questions if isinstance(q, str)],
+            constraints_applied=[str(c) for c in constraints if isinstance(c, str)],
+            cached=bool(data.get("cached", False)),
+            request_id=data.get("request_id"),
+        )
+    
+    def has_issues(self) -> bool:
+        """Check if there are any issues detected."""
+        return len(self.issues) > 0
+    
+    def get_issue_severities(self) -> List[str]:
+        """Get list of issue severity levels."""
+        return [
+            str(issue.get("severity", "UNKNOWN")).upper()
+            for issue in self.issues
+            if isinstance(issue, dict)
+        ]
+    
+    def has_high_severity_issues(self) -> bool:
+        """Check if there are any HIGH severity issues."""
+        return "HIGH" in self.get_issue_severities()
+    
+    def has_medium_severity_issues(self) -> bool:
+        """Check if there are any MEDIUM severity issues."""
+        return "MEDIUM" in self.get_issue_severities()
+    
+    def get_issue_codes(self) -> List[str]:
+        """Get list of issue codes."""
+        return [
+            str(issue.get("code", "UNKNOWN"))
+            for issue in self.issues
+            if isinstance(issue, dict)
+        ]
+
+
 class Stage0Client:
     """
     HTTP client for the Stage0 API.
@@ -39,10 +156,20 @@ class Stage0Client:
     - API key authentication via x-api-key header
     - Request formatting and validation
     - Response parsing and error handling
-    - Retry logic for transient failures
+    - Pro plan detection and handling
     
     The client is designed to be simple, stateless, and dependency-free
     (uses only the standard library).
+    
+    Usage:
+        client = Stage0Client(api_key="your-key")
+        response = client.check(
+            goal="Read configuration file",
+            tools=["filesystem"],
+            side_effects=[],
+        )
+        if response.verdict == "ALLOW":
+            proceed()
     """
     
     def __init__(
@@ -63,7 +190,9 @@ class Stage0Client:
         """
         self.api_key = api_key or os.environ.get("STAGE0_API_KEY")
         self.base_url = (base_url or os.environ.get("STAGE0_API_BASE") or DEFAULT_STAGE0_API_BASE).rstrip("/")
-        self.timeout_seconds = timeout_seconds or int(os.environ.get("STAGE0_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))
+        self.timeout_seconds = timeout_seconds or int(
+            os.environ.get("STAGE0_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
+        )
     
     def is_configured(self) -> bool:
         """
@@ -83,7 +212,7 @@ class Stage0Client:
         success_criteria: Optional[List[str]] = None,
         context: Optional[Dict[str, Any]] = None,
         pro: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> PolicyResponse:
         """
         Call the Stage0 /check endpoint.
         
@@ -99,11 +228,11 @@ class Stage0Client:
             pro: Whether this is a pro-mode check (requires paid plan).
         
         Returns:
-            The parsed JSON response from Stage0 as a dictionary.
-            Expected keys: verdict, decision, issues, clarifying_questions, etc.
+            PolicyResponse with the verdict and reasoning.
         
         Raises:
             InvalidApiKeyError: If the API key is invalid.
+            ProPlanRequiredError: If pro=true but on free plan.
             QuotaExceededError: If the API quota is exceeded.
             RateLimitedError: If rate limit is hit.
             Stage0ConnectionError: If unable to connect to Stage0.
@@ -123,7 +252,7 @@ class Stage0Client:
         
         return self._post("/check", payload)
     
-    def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(self, path: str, payload: Dict[str, Any]) -> PolicyResponse:
         """
         Make a POST request to the Stage0 API.
         
@@ -132,7 +261,7 @@ class Stage0Client:
             payload: Request body as a dictionary.
         
         Returns:
-            Parsed JSON response as a dictionary.
+            Parsed PolicyResponse.
         """
         url = f"{self.base_url}{path}"
         
@@ -156,7 +285,8 @@ class Stage0Client:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 response_body = response.read().decode("utf-8")
-                return json.loads(response_body)
+                data = json.loads(response_body)
+                return PolicyResponse.from_dict(data)
         
         except urllib.error.HTTPError as e:
             return self._handle_http_error(e)
@@ -173,46 +303,60 @@ class Stage0Client:
         except Exception as e:
             raise Stage0ConnectionError(str(e))
     
-    def _handle_http_error(self, error: urllib.error.HTTPError) -> Dict[str, Any]:
+    def _handle_http_error(self, error: urllib.error.HTTPError) -> PolicyResponse:
         """
         Handle HTTP error responses from the Stage0 API.
         
-        Maps HTTP status codes to appropriate exceptions.
+        Maps HTTP status codes to appropriate exceptions or responses.
         """
         request_id = None
+        error_data: Dict[str, Any] = {}
         
         try:
             body = error.read().decode("utf-8")
-            data = json.loads(body)
-            request_id = data.get("request_id")
+            error_data = json.loads(body)
+            request_id = error_data.get("request_id")
         except Exception:
-            data = {}
+            pass
         
         status_code = error.code
         
+        # 401 Unauthorized - Invalid API key
         if status_code == 401:
             raise InvalidApiKeyError(request_id)
         
+        # 402 Payment Required - Pro feature requested on free plan
         if status_code == 402:
-            raise QuotaExceededError(request_id)
+            detail = error_data.get("detail", "Pro checks require a paid plan")
+            if isinstance(detail, dict):
+                detail = detail.get("detail", str(detail))
+            raise ProPlanRequiredError(message=str(detail), request_id=request_id)
         
+        # 429 Too Many Requests - Rate limited
         if status_code == 429:
-            retry_after = data.get("retry_after_seconds")
+            retry_after = error_data.get("retry_after_seconds")
             raise RateLimitedError(
                 retry_after_seconds=retry_after,
                 request_id=request_id,
             )
         
+        # 503 Service Unavailable
         if status_code == 503:
             raise Stage0ConnectionError("Stage0 service temporarily unavailable")
         
-        # For other errors, return the response body if available
+        # For other errors, return a DENY response with the error details
         # This allows the caller to inspect the error details
-        if data:
-            data.setdefault("request_id", request_id)
-            return data
-        
-        raise Stage0ConnectionError(f"HTTP {status_code}: {error.reason}")
+        return PolicyResponse(
+            verdict="DENY",
+            reason=f"HTTP {status_code}: {error.reason}",
+            raw_response=error_data,
+            request_id=request_id,
+            issues=[{
+                "code": "HTTP_ERROR",
+                "severity": "HIGH",
+                "message": f"HTTP {status_code}: {error.reason}",
+            }],
+        )
 
 
 # Module-level client instance for convenience

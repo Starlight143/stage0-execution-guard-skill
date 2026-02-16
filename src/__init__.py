@@ -29,6 +29,12 @@ FAIL CLOSED:
     - Stage0 unreachable? Blocked.
     - Unknown verdict? Blocked.
 
+LOCAL RULES:
+    Additional rules can supplement Stage0 decisions:
+    - risk_threshold: Auto-deny if risk_score >= threshold
+    - deny_on_issues: Auto-deny when any issues detected
+    - deny_on_high_severity: Auto-deny on HIGH severity issues
+
 QUICK START:
     from stage0_execution_guard import ExecutionIntent, must_allow
     
@@ -50,7 +56,7 @@ For more information, visit: https://signalpulse.org
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "Stage0 Team"
 __all__ = [
     # Core classes
@@ -58,16 +64,19 @@ __all__ = [
     "ExecutionGuard",
     "GuardResult",
     "Stage0Client",
+    "PolicyResponse",
     # Errors
     "Stage0GuardError",
     "ApiKeyNotConfiguredError",
     "InvalidApiKeyError",
+    "ProPlanRequiredError",
     "ExecutionDeniedError",
     "ExecutionDeferredError",
     "InvalidIntentError",
     "Stage0ConnectionError",
     "QuotaExceededError",
     "RateLimitedError",
+    "RiskThresholdExceededError",
     # Convenience functions
     "check",
     "must_allow",
@@ -75,15 +84,17 @@ __all__ = [
     "get_client",
 ]
 
-from .client import Stage0Client, get_client
+from .client import PolicyResponse, Stage0Client, get_client
 from .errors import (
     ApiKeyNotConfiguredError,
     ExecutionDeferredError,
     ExecutionDeniedError,
     InvalidApiKeyError,
     InvalidIntentError,
+    ProPlanRequiredError,
     QuotaExceededError,
     RateLimitedError,
+    RiskThresholdExceededError,
     Stage0ConnectionError,
     Stage0GuardError,
 )

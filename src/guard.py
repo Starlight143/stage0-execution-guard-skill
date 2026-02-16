@@ -11,6 +11,14 @@ CORE PRINCIPLE: Fail Closed
 
 This guard is NOT optional. It is a mandatory execution gate.
 Remove it at your own risk: your agent will be unsafe.
+
+LOCAL RULES:
+The guard can apply additional local rules on top of Stage0 decisions:
+- risk_threshold: Auto-deny if risk_score >= threshold (default: 100, disabled)
+- deny_on_issues: Auto-deny when any issues are detected (default: False)
+- deny_on_high_severity: Auto-deny when HIGH severity issues are found (default: True)
+
+These rules provide extra protection layers, especially useful for free tier users.
 """
 
 from __future__ import annotations
@@ -18,12 +26,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .client import Stage0Client, get_client
+from .client import PolicyResponse, Stage0Client, get_client
 from .errors import (
     ApiKeyNotConfiguredError,
     ExecutionDeferredError,
     ExecutionDeniedError,
     InvalidIntentError,
+    RiskThresholdExceededError,
     Stage0GuardError,
 )
 
@@ -71,6 +80,10 @@ class ExecutionIntent:
         if not self.goal.strip():
             raise InvalidIntentError("goal is required and cannot be empty")
         
+        # Goal length check
+        if len(self.goal) > 8000:
+            raise InvalidIntentError("goal must be 8000 characters or less")
+        
         # Tools must be a list of strings
         if not isinstance(self.tools, list):
             raise InvalidIntentError("tools must be a list")
@@ -78,12 +91,20 @@ class ExecutionIntent:
             if not isinstance(tool, str):
                 raise InvalidIntentError(f"tools[{i}] must be a string")
         
+        # Tools count check
+        if len(self.tools) > 200:
+            raise InvalidIntentError("tools cannot have more than 200 items")
+        
         # Side effects must be a list of strings (can be empty)
         if not isinstance(self.side_effects, list):
             raise InvalidIntentError("side_effects must be a list")
         for i, effect in enumerate(self.side_effects):
             if not isinstance(effect, str):
                 raise InvalidIntentError(f"side_effects[{i}] must be a string")
+        
+        # Side effects count check
+        if len(self.side_effects) > 200:
+            raise InvalidIntentError("side_effects cannot have more than 200 items")
         
         # Constraints must be a list of strings (can be empty)
         if not isinstance(self.constraints, list):
@@ -118,35 +139,6 @@ class ExecutionIntent:
             "context": self.context,
             "pro": self.pro,
         }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ExecutionIntent":
-        """
-        Create an ExecutionIntent from a dictionary.
-        
-        Args:
-            data: Dictionary containing intent data.
-        
-        Returns:
-            A new ExecutionIntent instance.
-        
-        Raises:
-            InvalidIntentError: If required fields are missing or invalid.
-        """
-        required_fields = ["goal", "tools", "side_effects"]
-        for field_name in required_fields:
-            if field_name not in data:
-                raise InvalidIntentError(f"Missing required field: {field_name}")
-        
-        return cls(
-            goal=data["goal"],
-            tools=data["tools"],
-            side_effects=data["side_effects"],
-            constraints=data.get("constraints", []),
-            success_criteria=data.get("success_criteria", []),
-            context=data.get("context", {}),
-            pro=data.get("pro", False),
-        )
 
 
 @dataclass
@@ -164,6 +156,7 @@ class GuardResult:
         clarifying_questions: Questions to answer for DEFER verdicts.
         risk_score: Overall risk score (0-100).
         raw_response: The complete raw response from Stage0.
+        locally_denied: Whether the denial was applied by local rules.
     """
     
     allowed: bool
@@ -173,10 +166,12 @@ class GuardResult:
     clarifying_questions: List[str] = field(default_factory=list)
     risk_score: int = 0
     raw_response: Dict[str, Any] = field(default_factory=dict)
+    locally_denied: bool = False
     
     def __str__(self) -> str:
         status = "ALLOWED" if self.allowed else f"BLOCKED ({self.verdict})"
-        return f"GuardResult({status}, risk_score={self.risk_score})"
+        local = " [local rule]" if self.locally_denied else ""
+        return f"GuardResult({status}{local}, risk_score={self.risk_score})"
 
 
 class ExecutionGuard:
@@ -189,6 +184,11 @@ class ExecutionGuard:
     IMPORTANT: This guard does NOT make decisions. It ONLY enforces
     the decisions made by Stage0. All authorization logic lives on
     the Stage0 server.
+    
+    Local rules can supplement Stage0 decisions:
+    - risk_threshold: Auto-deny if risk_score >= threshold
+    - deny_on_issues: Auto-deny when any issues are detected
+    - deny_on_high_severity: Auto-deny when HIGH severity issues are found
     
     Usage:
         guard = ExecutionGuard()
@@ -212,18 +212,27 @@ class ExecutionGuard:
     def __init__(
         self,
         client: Optional[Stage0Client] = None,
-        fail_closed: bool = True,
+        risk_threshold: int = 100,
+        deny_on_issues: bool = False,
+        deny_on_high_severity: bool = True,
     ) -> None:
         """
         Initialize the execution guard.
         
         Args:
             client: Stage0Client instance. If not provided, uses the default.
-            fail_closed: If True (default), block execution on errors.
-                        If False, allow execution on errors (NOT RECOMMENDED).
+            risk_threshold: Auto-deny if risk_score >= threshold.
+                           Default 100 means disabled (risk scores are 0-100).
+                           Set lower (e.g., 50) to deny risky operations.
+            deny_on_issues: If True, auto-deny when ANY issues are detected.
+                           Default False lets Stage0 decide based on severity.
+            deny_on_high_severity: If True, auto-deny when HIGH severity issues
+                                  are found. Default True for extra safety.
         """
         self._client = client or get_client()
-        self._fail_closed = fail_closed
+        self._risk_threshold = risk_threshold
+        self._deny_on_issues = deny_on_issues
+        self._deny_on_high_severity = deny_on_high_severity
     
     def check(self, intent: ExecutionIntent) -> GuardResult:
         """
@@ -245,6 +254,7 @@ class ExecutionGuard:
             ApiKeyNotConfiguredError: No API key is configured.
             ExecutionDeniedError: Stage0 returned DENY verdict.
             ExecutionDeferredError: Stage0 returned DEFER verdict.
+            RiskThresholdExceededError: Local risk threshold exceeded.
             Stage0GuardError: Other guard-related errors.
         """
         # Check if API key is configured
@@ -262,69 +272,125 @@ class ExecutionGuard:
             pro=intent.pro,
         )
         
-        # Parse the response
-        verdict = response.get("verdict", "DENY").upper()
-        request_id = response.get("request_id")
+        # Apply local rules BEFORE processing verdict
+        # This allows local rules to override Stage0's ALLOW
+        if response.verdict == "ALLOW":
+            local_result = self._apply_local_rules(response)
+            if local_result is not None:
+                return local_result
         
-        # Extract issues
-        issues = []
-        raw_issues = response.get("issues", [])
-        if isinstance(raw_issues, list):
-            for issue in raw_issues:
-                if isinstance(issue, dict):
-                    code = issue.get("code", "UNKNOWN")
-                    message = issue.get("message", "")
-                    issues.append(f"[{code}] {message}")
-                elif isinstance(issue, str):
-                    issues.append(issue)
+        # Process the Stage0 verdict
+        return self._process_verdict(response)
+    
+    def _apply_local_rules(self, response: PolicyResponse) -> Optional[GuardResult]:
+        """
+        Apply local validation rules.
         
-        # Extract clarifying questions
-        clarifying_questions = []
-        raw_questions = response.get("clarifying_questions", [])
-        if isinstance(raw_questions, list):
-            for q in raw_questions:
-                if isinstance(q, str):
-                    clarifying_questions.append(q)
+        These rules can supplement Stage0 decisions by applying
+        additional checks on top of the API response.
         
-        risk_score = response.get("risk_score", 0)
+        Args:
+            response: The Stage0 API response.
         
-        # Enforce the verdict
-        if verdict == "ALLOW":
-            return GuardResult(
-                allowed=True,
-                verdict=verdict,
-                request_id=request_id,
-                issues=issues,
-                clarifying_questions=clarifying_questions,
-                risk_score=risk_score,
-                raw_response=response,
+        Returns:
+            GuardResult with allowed=False if local rules deny,
+            None if local rules pass.
+        """
+        # Check risk threshold
+        if response.risk_score >= self._risk_threshold:
+            raise RiskThresholdExceededError(
+                risk_score=response.risk_score,
+                threshold=self._risk_threshold,
             )
         
-        if verdict == "DENY":
-            message = "Execution denied by Stage0."
-            if issues:
-                message += f" Issues: {'; '.join(issues[:3])}"
+        # Check for issues if deny_on_issues is enabled
+        if self._deny_on_issues and response.has_issues():
+            issues = self._format_issues(response.issues)
+            raise ExecutionDeniedError(
+                message=f"Issues detected: {response.reason}",
+                issues=issues,
+                request_id=response.request_id,
+                risk_score=response.risk_score,
+            )
+        
+        # Check for HIGH severity issues if deny_on_high_severity is enabled
+        if self._deny_on_high_severity and response.has_high_severity_issues():
+            issues = self._format_issues(response.issues)
+            raise ExecutionDeniedError(
+                message=f"HIGH severity issues detected: {response.reason}",
+                issues=issues,
+                request_id=response.request_id,
+                risk_score=response.risk_score,
+            )
+        
+        return None
+    
+    def _process_verdict(self, response: PolicyResponse) -> GuardResult:
+        """
+        Process the Stage0 verdict and raise appropriate exceptions.
+        
+        Args:
+            response: The Stage0 API response.
+        
+        Returns:
+            GuardResult for ALLOW verdict.
+        
+        Raises:
+            ExecutionDeniedError: For DENY verdict.
+            ExecutionDeferredError: For DEFER verdict.
+        """
+        issues = self._format_issues(response.issues)
+        
+        if response.verdict == "ALLOW":
+            return GuardResult(
+                allowed=True,
+                verdict=response.verdict,
+                request_id=response.request_id,
+                issues=issues,
+                clarifying_questions=response.clarifying_questions,
+                risk_score=response.risk_score,
+                raw_response=response.raw_response,
+            )
+        
+        if response.verdict == "DENY":
+            message = f"Execution denied by Stage0: {response.reason}"
             raise ExecutionDeniedError(
                 message=message,
                 issues=issues,
-                request_id=request_id,
+                request_id=response.request_id,
+                risk_score=response.risk_score,
             )
         
-        if verdict == "DEFER":
-            message = "Execution deferred. Additional information required."
+        if response.verdict == "DEFER":
+            message = f"Execution deferred: {response.reason}"
             raise ExecutionDeferredError(
                 message=message,
-                clarifying_questions=clarifying_questions,
+                clarifying_questions=response.clarifying_questions,
                 issues=issues,
-                request_id=request_id,
+                request_id=response.request_id,
+                risk_score=response.risk_score,
             )
         
         # Unknown verdict - fail closed
         raise ExecutionDeniedError(
-            message=f"Unknown verdict from Stage0: {verdict}",
+            message=f"Unknown verdict from Stage0: {response.verdict}",
             issues=issues,
-            request_id=request_id,
+            request_id=response.request_id,
+            risk_score=response.risk_score,
         )
+    
+    def _format_issues(self, raw_issues: List[Any]) -> List[str]:
+        """Format raw issues into human-readable strings."""
+        formatted = []
+        for issue in raw_issues:
+            if isinstance(issue, dict):
+                code = issue.get("code", "UNKNOWN")
+                severity = issue.get("severity", "")
+                message = issue.get("message", "")
+                formatted.append(f"[{severity}] {code}: {message}")
+            elif isinstance(issue, str):
+                formatted.append(issue)
+        return formatted
     
     def check_or_raise(self, intent: ExecutionIntent) -> None:
         """

@@ -1,34 +1,44 @@
 # Stage0 Execution Guard Skill
 
-## 這個 skill 是做什麼的
+## What This Skill Does
 
-Stage0 Execution Guard Skill 是一個執行守門員（execution gate）。它的唯一職責是：在 AI agent 執行任何行為之前，判斷該執行是否被允許。這是一個強制性的安全機制，不是可選功能。agent 必須先通過這個 guard 的檢查，才能繼續執行。如果 guard 阻擋了執行，agent 就無法繼續——無論 agent 的 prompt 如何設計。
+Stage0 Execution Guard Skill is an **execution gate**. Its sole purpose is to determine whether an AI agent is **permitted to continue execution** before any action is taken. This is a mandatory security mechanism, not an optional feature. Agents must pass this guard's check before proceeding. If the guard blocks execution, the agent cannot continue—regardless of how the agent's prompt is designed.
 
-## 為什麼只靠 prompt 無法阻止執行
+## Why Prompts Alone Cannot Stop Execution
 
-Prompt 是指令，不是約束。LLM 可以理解「不要做某事」，但無法被強制遵守。當 model 產生幻覺、被誤導、或遇到 edge case 時，它可能會忽略或繞過 prompt 中的限制。更重要的是，prompt 無法控制執行層——它只能影響 model 的輸出。如果 model 決定要執行某個危險操作，prompt 無法在物理上阻止它。只有 code 可以做到這一點。這個 skill 就是一道 code 層面的強制關卡。
+Prompts are instructions, not constraints. LLMs can understand "do not do X" but cannot be forcibly compelled to comply. When a model hallucinates, is misled, or encounters edge cases, it may ignore or circumvent prompt-based limitations. More importantly, prompts cannot control the execution layer—they can only influence model output. If a model decides to execute a dangerous operation, prompts cannot physically prevent it. Only code can do that. This skill is a code-level mandatory gate.
 
-## 這個 execution guard 如何阻擋執行
+## How This Execution Guard Blocks Execution
 
-Guard 透過「fail closed」原則運作：預設拒絕，只有明確授權才放行。當 agent 準備執行時，它必須先向 guard 提交執行意圖（execution intent），包含：目標（goal）、預計使用的工具（tools）、可能的副作用（side_effects）。Guard 將這些資訊送往 Stage0 API 進行授權檢查。Stage0 會返回三種結果之一：
+The guard operates on a **fail-closed** principle: deny by default, allow only with explicit authorization. When an agent prepares to execute, it must first submit an **execution intent** to the guard, containing: goal, planned tools, and potential side effects. The guard sends this information to the Stage0 API for authorization. Stage0 returns one of three verdicts:
 
-- **ALLOW**：執行被允許，guard 返回成功，agent 繼續執行
-- **DENY**：執行被拒絕，guard 拋出異常，agent 無法繼續
-- **DEFER**：需要更多資訊，guard 拋出異常並附上澄清問題
+- **ALLOW**: Execution is permitted. The guard returns success, and the agent proceeds.
+- **DENY**: Execution is rejected. The guard raises an exception, and the agent cannot continue.
+- **DEFER**: More information is required. The guard raises an exception with clarifying questions.
 
-關鍵點：只要 verdict 不是 ALLOW，執行就會被阻擋。沒有中間狀態，沒有「試試看」。如果 API key 未設定、無效、或 Stage0 服務不可用，執行同樣會被阻擋。
+Key point: if the verdict is anything other than ALLOW, execution is blocked. There are no intermediate states, no "try anyway." If the API key is not set, invalid, or the Stage0 service is unavailable, execution is also blocked.
 
-## 設定方式
+### Local Rules (Optional)
 
-1. 前往 https://signalpulse.org 註冊帳號
-2. 在控制台取得 API Key
-3. 設定環境變數：
+The guard can apply additional local rules on top of Stage0 decisions:
+
+- **risk_threshold**: Auto-deny if `risk_score >= threshold` (default: 100, effectively disabled)
+- **deny_on_issues**: Auto-deny when any issues are detected (default: False)
+- **deny_on_high_severity**: Auto-deny when HIGH severity issues are found (default: True)
+
+These rules provide extra protection layers, especially useful for free tier users who want additional risk-based blocking.
+
+## Setup
+
+1. Visit https://signalpulse.org to register an account
+2. Obtain an API Key from the dashboard
+3. Set the environment variable:
 
 ```bash
 export STAGE0_API_KEY=your-api-key-here
 ```
 
-或在 Python 中直接指定：
+Or configure directly in Python:
 
 ```python
 from stage0_execution_guard import Stage0Client, ExecutionGuard
@@ -37,24 +47,43 @@ client = Stage0Client(api_key="your-api-key-here")
 guard = ExecutionGuard(client=client)
 ```
 
-## 最小整合範例
+## Minimal Integration Example
 
 ```python
 from stage0_execution_guard import ExecutionIntent, must_allow
 
-# 定義執行意圖
+# Define execution intent
 intent = ExecutionIntent(
     goal="Read and summarize the weekly sales report",
     tools=["filesystem", "llm"],
-    side_effects=[],  # 只讀取，無副作用
+    side_effects=[],  # Read-only, no side effects
 )
 
-# 必須通過檢查才能繼續
-# 如果不被允許，這行會拋出異常，後續代碼不會執行
+# Must pass check to continue
+# If not allowed, this raises an exception and subsequent code won't execute
 must_allow(intent)
 
-# 到這裡，執行已被授權
+# At this point, execution is authorized
 result = read_and_summarize_report()
 ```
 
-**重要提醒**：這是一個執行守門員。如果你拿掉它，你的 agent 就是不安全的。
+### Advanced Configuration
+
+```python
+from stage0_execution_guard import ExecutionGuard
+
+# Create guard with local rules
+guard = ExecutionGuard(
+    risk_threshold=50,           # Auto-deny if risk_score >= 50
+    deny_on_issues=False,        # Don't auto-deny on any issues
+    deny_on_high_severity=True,  # Auto-deny on HIGH severity issues (default)
+)
+
+# Check with detailed result
+result = guard.check(intent)
+print(f"Allowed: {result.allowed}")
+print(f"Risk Score: {result.risk_score}")
+print(f"Issues: {result.issues}")
+```
+
+**Important**: This is an execution gate. If you remove it, your agent is unsafe.
