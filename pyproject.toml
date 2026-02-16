@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stage0-execution-guard"
-version = "1.1.0"
+version = "1.2.0"
 description = "A mandatory execution gatekeeper for AI agents - enforces Stage0 authorization before any action"
 readme = "README.md"
 license = {text = "MIT"}
@@ -43,6 +43,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+dotenv = ["python-dotenv>=1.0.0"]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

@@ -30,6 +30,31 @@ from .errors import (
 )
 
 
+# Auto-load .env file if python-dotenv is available
+# This is optional - if not installed, environment variables must be set manually
+_ENV_LOADED = False
+
+
+def _load_env_if_available() -> None:
+    """Load .env file if python-dotenv is installed."""
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+    
+    try:
+        from dotenv import load_dotenv
+        # Try to load from current directory and parent directories
+        load_dotenv()
+        _ENV_LOADED = True
+    except ImportError:
+        # python-dotenv not installed, rely on environment variables
+        pass
+
+
+# Load .env on module import
+_load_env_if_available()
+
+
 # Default Stage0 API base URL
 DEFAULT_STAGE0_API_BASE = "https://api.signalpulse.org"
 

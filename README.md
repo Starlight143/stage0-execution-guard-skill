@@ -28,17 +28,43 @@ The guard can apply additional local rules on top of Stage0 decisions:
 
 These rules provide extra protection layers, especially useful for free tier users who want additional risk-based blocking.
 
+## Installation
+
+```bash
+# Basic installation (zero dependencies)
+pip install stage0-execution-guard
+
+# With .env file auto-loading support
+pip install stage0-execution-guard[dotenv]
+```
+
 ## Setup
 
 1. Visit https://signalpulse.org to register an account
 2. Obtain an API Key from the dashboard
-3. Set the environment variable:
+3. Configure your API key:
+
+**Option A: Using .env file (recommended)**
+
+Create a `.env` file in your project root:
+
+```bash
+STAGE0_API_KEY=your-api-key-here
+```
+
+The skill will automatically load the `.env` file if `python-dotenv` is installed:
+
+```bash
+pip install stage0-execution-guard[dotenv]
+```
+
+**Option B: Environment variable**
 
 ```bash
 export STAGE0_API_KEY=your-api-key-here
 ```
 
-Or configure directly in Python:
+**Option C: Direct configuration in code**
 
 ```python
 from stage0_execution_guard import Stage0Client, ExecutionGuard
