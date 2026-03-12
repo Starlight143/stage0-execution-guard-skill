@@ -56,7 +56,7 @@ For more information, visit: https://signalpulse.org
 
 from __future__ import annotations
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 __author__ = "Stage0 Team"
 __all__ = [
     # Core classes
