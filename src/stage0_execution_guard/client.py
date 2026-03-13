@@ -87,9 +87,11 @@ class PolicyResponse:
     reason: str
     raw_response: Dict[str, Any] = field(default_factory=dict)
     risk_score: int = 0
+    high_risk: bool = False
     issues: List[Dict[str, Any]] = field(default_factory=list)
     clarifying_questions: List[str] = field(default_factory=list)
     constraints_applied: List[str] = field(default_factory=list)
+    guardrail_checks: Dict[str, Any] = field(default_factory=dict)
     cached: bool = False
     request_id: Optional[str] = None
     
@@ -146,9 +148,15 @@ class PolicyResponse:
             reason=reason,
             raw_response=data,
             risk_score=int(data.get("risk_score", 0)),
+            high_risk=bool(data.get("high_risk", False)),
             issues=issues,
             clarifying_questions=[str(q) for q in questions if isinstance(q, str)],
             constraints_applied=[str(c) for c in constraints if isinstance(c, str)],
+            guardrail_checks=(
+                data.get("guardrail_checks")
+                if isinstance(data.get("guardrail_checks"), dict)
+                else {}
+            ),
             cached=bool(data.get("cached", False)),
             request_id=data.get("request_id"),
         )

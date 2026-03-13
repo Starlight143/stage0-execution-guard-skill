@@ -165,6 +165,8 @@ class GuardResult:
     issues: List[str] = field(default_factory=list)
     clarifying_questions: List[str] = field(default_factory=list)
     risk_score: int = 0
+    high_risk: bool = False
+    guardrail_checks: Dict[str, Any] = field(default_factory=dict)
     raw_response: Dict[str, Any] = field(default_factory=dict)
     locally_denied: bool = False
     
@@ -345,12 +347,14 @@ class ExecutionGuard:
             return GuardResult(
                 allowed=True,
                 verdict=response.verdict,
-                request_id=response.request_id,
-                issues=issues,
-                clarifying_questions=response.clarifying_questions,
-                risk_score=response.risk_score,
-                raw_response=response.raw_response,
-            )
+            request_id=response.request_id,
+            issues=issues,
+            clarifying_questions=response.clarifying_questions,
+            risk_score=response.risk_score,
+            high_risk=response.high_risk,
+            guardrail_checks=response.guardrail_checks,
+            raw_response=response.raw_response,
+        )
         
         if response.verdict == "DENY":
             message = f"Execution denied by Stage0: {response.reason}"

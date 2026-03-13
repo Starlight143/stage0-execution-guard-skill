@@ -1,115 +1,145 @@
 # Stage0 Execution Guard Skill
 
-## What This Skill Does
+Stage0 Execution Guard Skill is a fail-closed execution gate for AI agents. Before an agent performs real work, it submits an execution intent to Stage0 and receives an authorization verdict. If the verdict is not `ALLOW`, execution must stop.
 
-Stage0 Execution Guard Skill is an **execution gate**. Its sole purpose is to determine whether an AI agent is **permitted to continue execution** before any action is taken. This is a mandatory security mechanism, not an optional feature. Agents must pass this guard's check before proceeding. If the guard blocks execution, the agent cannot continue—regardless of how the agent's prompt is designed.
+This package is meant to enforce the execution boundary in code. Prompts can influence model behavior, but they cannot reliably prevent execution.
 
-## Why Prompts Alone Cannot Stop Execution
+## Verdict Model
 
-Prompts are instructions, not constraints. LLMs can understand "do not do X" but cannot be forcibly compelled to comply. When a model hallucinates, is misled, or encounters edge cases, it may ignore or circumvent prompt-based limitations. More importantly, prompts cannot control the execution layer—they can only influence model output. If a model decides to execute a dangerous operation, prompts cannot physically prevent it. Only code can do that. This skill is a code-level mandatory gate.
+Stage0 returns one of three verdicts:
 
-## How This Execution Guard Blocks Execution
+- `ALLOW`: execution may proceed
+- `DENY`: execution is blocked
+- `DEFER`: execution is blocked until clarifying questions are answered
 
-The guard operates on a **fail-closed** principle: deny by default, allow only with explicit authorization. When an agent prepares to execute, it must first submit an **execution intent** to the guard, containing: goal, planned tools, and potential side effects. The guard sends this information to the Stage0 API for authorization. Stage0 returns one of three verdicts:
+The package also supports local enforcement rules on top of the API response:
 
-- **ALLOW**: Execution is permitted. The guard returns success, and the agent proceeds.
-- **DENY**: Execution is rejected. The guard raises an exception, and the agent cannot continue.
-- **DEFER**: More information is required. The guard raises an exception with clarifying questions.
-
-Key point: if the verdict is anything other than ALLOW, execution is blocked. There are no intermediate states, no "try anyway." If the API key is not set, invalid, or the Stage0 service is unavailable, execution is also blocked.
-
-### Local Rules (Optional)
-
-The guard can apply additional local rules on top of Stage0 decisions:
-
-- **risk_threshold**: Auto-deny if `risk_score >= threshold` (default: 100, effectively disabled)
-- **deny_on_issues**: Auto-deny when any issues are detected (default: False)
-- **deny_on_high_severity**: Auto-deny when HIGH severity issues are found (default: True)
-
-These rules provide extra protection layers, especially useful for free tier users who want additional risk-based blocking.
+- `risk_threshold`: auto-deny if `risk_score >= threshold`
+- `deny_on_issues`: auto-deny if any issues are present
+- `deny_on_high_severity`: auto-deny if any HIGH severity issue is present
 
 ## Installation
 
 ```bash
-# Basic installation (zero dependencies)
 pip install stage0-execution-guard
-
-# With .env file auto-loading support
 pip install stage0-execution-guard[dotenv]
 ```
 
 ## Setup
 
-1. Visit https://signalpulse.org to register an account
-2. Obtain an API Key from the dashboard
-3. Configure your API key:
+1. Visit `https://signalpulse.org`
+2. Create an account and obtain an API key
+3. Configure the package with one of these options
 
-**Option A: Using .env file (recommended)**
-
-Create a `.env` file in your project root:
+### Option A: `.env` file
 
 ```bash
 STAGE0_API_KEY=your-api-key-here
 ```
 
-The skill will automatically load the `.env` file if `python-dotenv` is installed:
+If `python-dotenv` is installed, the package auto-loads `.env` on import.
 
-```bash
-pip install stage0-execution-guard[dotenv]
-```
-
-**Option B: Environment variable**
+### Option B: environment variable
 
 ```bash
 export STAGE0_API_KEY=your-api-key-here
 ```
 
-**Option C: Direct configuration in code**
+### Option C: direct configuration
 
 ```python
-from stage0_execution_guard import Stage0Client, ExecutionGuard
+from stage0_execution_guard import ExecutionGuard, Stage0Client
 
 client = Stage0Client(api_key="your-api-key-here")
 guard = ExecutionGuard(client=client)
 ```
 
-## Minimal Integration Example
+### Optional local runtime override
+
+Production defaults to `https://api.signalpulse.org`. For local runtime development, point the client at a local Stage0 API:
+
+```bash
+STAGE0_API_BASE=http://127.0.0.1:8000
+```
+
+## Minimal Example
 
 ```python
 from stage0_execution_guard import ExecutionIntent, must_allow
 
-# Define execution intent
 intent = ExecutionIntent(
-    goal="Read and summarize the weekly sales report",
-    tools=["filesystem", "llm"],
-    side_effects=[],  # Read-only, no side effects
+    goal="Summarize a risky deployment request",
+    success_criteria=["Return a safe recommendation"],
+    constraints=["dry-run", "approval"],
+    tools=["shell"],
+    side_effects=["deploy"],
+    pro=True,
 )
 
-# Must pass check to continue
-# If not allowed, this raises an exception and subsequent code won't execute
 must_allow(intent)
 
-# At this point, execution is authorized
-result = read_and_summarize_report()
+# If execution reaches here, Stage0 allowed it.
 ```
 
-### Advanced Configuration
+## Detailed Response Example
 
 ```python
-from stage0_execution_guard import ExecutionGuard
+from stage0_execution_guard import ExecutionGuard, ExecutionIntent
 
-# Create guard with local rules
 guard = ExecutionGuard(
-    risk_threshold=50,           # Auto-deny if risk_score >= 50
-    deny_on_issues=False,        # Don't auto-deny on any issues
-    deny_on_high_severity=True,  # Auto-deny on HIGH severity issues (default)
+    risk_threshold=50,
+    deny_on_issues=False,
+    deny_on_high_severity=True,
 )
 
-# Check with detailed result
+intent = ExecutionIntent(
+    goal="Review an internal-tools permission change",
+    success_criteria=["Confirm whether execution should proceed"],
+    constraints=["approval", "require_mfa", "rollback_plan_required"],
+    tools=["identity"],
+    side_effects=["permission_change"],
+    context={"run_id": "abc-123", "approval_status": "approved"},
+    pro=True,
+)
+
 result = guard.check(intent)
-print(f"Allowed: {result.allowed}")
-print(f"Risk Score: {result.risk_score}")
-print(f"Issues: {result.issues}")
+print(result.allowed)
+print(result.verdict)
+print(result.risk_score)
+print(result.high_risk)
+print(result.issues)
+print(result.clarifying_questions)
+print(result.guardrail_checks)
 ```
 
-**Important**: This is an execution gate. If you remove it, your agent is unsafe.
+## Response Fields
+
+The Stage0 API response consumed by this package includes:
+
+- `verdict`
+- `risk_score`
+- `high_risk`
+- `issues`
+- `clarifying_questions`
+- `constraints_applied`
+- `guardrail_checks`
+- `request_id`
+
+The client tolerates additive fields in the API response and preserves the raw payload in `raw_response`.
+
+## Operational Notes
+
+- No API key configured: execution is blocked
+- Invalid API key: execution is blocked
+- Stage0 unreachable: execution is blocked
+- Unknown verdict: execution is blocked
+
+This is intentional. The package is designed to fail closed.
+
+## Project Links
+
+- Homepage: `https://signalpulse.org`
+- Docs: `https://signalpulse.org/docs`
+- Default API base: `https://api.signalpulse.org`
+
+Removing this guard removes the execution boundary. Treat it as mandatory infrastructure, not optional middleware.
