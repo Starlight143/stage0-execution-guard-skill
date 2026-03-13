@@ -20,9 +20,20 @@ The package also supports local enforcement rules on top of the API response:
 
 ## Installation
 
+This package is not currently published on PyPI. Do not use `pip install stage0-execution-guard`.
+
+Install from GitHub:
+
 ```bash
-pip install stage0-execution-guard
-pip install stage0-execution-guard[dotenv]
+pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git"
+pip install "stage0-execution-guard[dotenv] @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git"
+```
+
+Or install from a local clone:
+
+```bash
+pip install .
+pip install ".[dotenv]"
 ```
 
 ## Setup
