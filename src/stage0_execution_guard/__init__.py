@@ -56,7 +56,7 @@ For more information, visit: https://signalpulse.org
 
 from __future__ import annotations
 
-__version__ = "1.2.3"
+__version__ = "1.2.4"
 __author__ = "Stage0 Team"
 __all__ = [
     # Core classes
@@ -65,6 +65,7 @@ __all__ = [
     "GuardResult",
     "Stage0Client",
     "PolicyResponse",
+    "UsageResponse",
     # Errors
     "Stage0GuardError",
     "ApiKeyNotConfiguredError",
@@ -84,7 +85,7 @@ __all__ = [
     "get_client",
 ]
 
-from .client import PolicyResponse, Stage0Client, get_client
+from .client import PolicyResponse, Stage0Client, UsageResponse, get_client
 from .errors import (
     ApiKeyNotConfiguredError,
     ExecutionDeferredError,

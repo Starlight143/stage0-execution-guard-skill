@@ -123,9 +123,23 @@ print(result.clarifying_questions)
 print(result.guardrail_checks)
 ```
 
+## Usage API Example
+
+```python
+from stage0_execution_guard import Stage0Client
+
+client = Stage0Client(api_key="your-api-key-here")
+usage = client.get_usage()
+
+print(usage.plan)
+print(usage.monthly_remaining)
+print(usage.daily_remaining)
+print(usage.minute_remaining)
+```
+
 ## Response Fields
 
-The Stage0 API response consumed by this package includes:
+The Stage0 `/check` response consumed by this package includes:
 
 - `verdict`
 - `risk_score`
@@ -136,12 +150,29 @@ The Stage0 API response consumed by this package includes:
 - `guardrail_checks`
 - `request_id`
 
-The client tolerates additive fields in the API response and preserves the raw payload in `raw_response`.
+The Stage0 `/usage` response consumed by this package includes:
+
+- `plan`
+- `month_key`
+- `monthly_used`
+- `monthly_quota`
+- `monthly_remaining`
+- `day_key`
+- `daily_used`
+- `daily_quota`
+- `daily_remaining`
+- `per_minute_limit`
+- `minute_used`
+- `minute_remaining`
+- `request_id`
+
+The client tolerates additive fields in API responses and preserves the raw payload in `raw_response`.
 
 ## Operational Notes
 
 - No API key configured: execution is blocked
 - Invalid API key: execution is blocked
+- Monthly quota exceeded: execution is blocked and surfaced as `QuotaExceededError`
 - Stage0 unreachable: execution is blocked
 - Unknown verdict: execution is blocked
 

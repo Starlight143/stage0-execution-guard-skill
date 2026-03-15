@@ -190,6 +190,59 @@ class PolicyResponse:
         ]
 
 
+@dataclass
+class UsageResponse:
+    """
+    Structured response from the Stage0 usage endpoint.
+
+    This mirrors the additive usage contract exposed by the runtime,
+    including monthly, daily, and per-minute counters.
+    """
+
+    request_id: str = ""
+    api_key_id: str = ""
+    plan: str = ""
+    month_key: str = ""
+    monthly_used: int = 0
+    monthly_quota: int = 0
+    monthly_remaining: int = 0
+    day_key: str = ""
+    daily_used: int = 0
+    daily_quota: int = 0
+    daily_remaining: int = 0
+    per_minute_limit: int = 0
+    minute_used: int = 0
+    minute_remaining: int = 0
+    environment: str = ""
+    source: str = ""
+    evaluated_at: float = 0.0
+    raw_response: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "UsageResponse":
+        """Parse a usage response from the API response dictionary."""
+        return cls(
+            request_id=str(data.get("request_id", "")),
+            api_key_id=str(data.get("api_key_id", "")),
+            plan=str(data.get("plan", "")),
+            month_key=str(data.get("month_key", "")),
+            monthly_used=int(data.get("monthly_used", 0)),
+            monthly_quota=int(data.get("monthly_quota", 0)),
+            monthly_remaining=int(data.get("monthly_remaining", 0)),
+            day_key=str(data.get("day_key", "")),
+            daily_used=int(data.get("daily_used", 0)),
+            daily_quota=int(data.get("daily_quota", 0)),
+            daily_remaining=int(data.get("daily_remaining", 0)),
+            per_minute_limit=int(data.get("per_minute_limit", 0)),
+            minute_used=int(data.get("minute_used", 0)),
+            minute_remaining=int(data.get("minute_remaining", 0)),
+            environment=str(data.get("environment", "")),
+            source=str(data.get("source", "")),
+            evaluated_at=float(data.get("evaluated_at", 0.0)),
+            raw_response=data,
+        )
+
+
 class Stage0Client:
     """
     HTTP client for the Stage0 API.
@@ -291,9 +344,27 @@ class Stage0Client:
             "context": context or {},
             "pro": pro,
         }
-        
+
         return self._post("/check", payload)
-    
+
+    def get_usage(self) -> UsageResponse:
+        """
+        Call the Stage0 /usage endpoint.
+
+        Returns:
+            UsageResponse containing monthly, daily, and per-minute counters.
+
+        Raises:
+            InvalidApiKeyError: If the API key is invalid.
+            QuotaExceededError: If the API key quota is exceeded.
+            RateLimitedError: If rate limit is hit.
+            Stage0ConnectionError: If unable to connect to Stage0.
+        """
+        if not self.is_configured():
+            raise InvalidApiKeyError()
+
+        return self._get("/usage")
+
     def _post(self, path: str, payload: Dict[str, Any]) -> PolicyResponse:
         """
         Make a POST request to the Stage0 API.
@@ -345,6 +416,52 @@ class Stage0Client:
         
         except Exception as e:
             raise Stage0ConnectionError(str(e))
+
+    def _get(self, path: str) -> UsageResponse:
+        """
+        Make a GET request to the Stage0 API.
+
+        Args:
+            path: API endpoint path (e.g., "/usage").
+
+        Returns:
+            Parsed UsageResponse.
+        """
+        url = f"{self.base_url}{path}"
+
+        headers = {
+            "Accept": "application/json",
+            "x-api-key": self.api_key,
+            "User-Agent": f"stage0-execution-guard/{_get_version()}",
+        }
+
+        request = urllib.request.Request(
+            url,
+            headers=headers,
+            method="GET",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                response_body = response.read().decode("utf-8")
+                data = json.loads(response_body)
+                return UsageResponse.from_dict(data)
+
+        except urllib.error.HTTPError as e:
+            self._raise_http_error(e)
+            raise Stage0ConnectionError("Unhandled HTTP error")
+
+        except urllib.error.URLError as e:
+            raise Stage0ConnectionError(str(e.reason))
+
+        except json.JSONDecodeError as e:
+            raise Stage0ConnectionError(f"Invalid JSON response: {e}")
+
+        except TimeoutError:
+            raise Stage0ConnectionError("Request timed out")
+
+        except Exception as e:
+            raise Stage0ConnectionError(str(e))
     
     def _handle_http_error(self, error: urllib.error.HTTPError) -> PolicyResponse:
         """
@@ -352,54 +469,92 @@ class Stage0Client:
         
         Maps HTTP status codes to appropriate exceptions or responses.
         """
-        request_id = None
-        error_data: Dict[str, Any] = {}
-        
-        try:
-            body = error.read().decode("utf-8")
-            error_data = json.loads(body)
-            request_id = error_data.get("request_id")
-        except Exception:
-            pass
-        
-        status_code = error.code
-        
-        # 401 Unauthorized - Invalid API key
-        if status_code == 401:
+        error_data, request_id = self._parse_error_response(error)
+        detail = self._get_error_detail(error_data, error.reason)
+
+        if error.code == 401:
             raise InvalidApiKeyError(request_id)
-        
-        # 402 Payment Required - Pro feature requested on free plan
-        if status_code == 402:
-            detail = error_data.get("detail", "Pro checks require a paid plan")
-            if isinstance(detail, dict):
-                detail = detail.get("detail", str(detail))
-            raise ProPlanRequiredError(message=str(detail), request_id=request_id)
-        
-        # 429 Too Many Requests - Rate limited
-        if status_code == 429:
+
+        if error.code == 402:
+            if "quota" in detail.lower():
+                raise QuotaExceededError(request_id=request_id)
+            raise ProPlanRequiredError(message=detail, request_id=request_id)
+
+        if error.code == 429:
             retry_after = error_data.get("retry_after_seconds")
             raise RateLimitedError(
                 retry_after_seconds=retry_after,
                 request_id=request_id,
             )
-        
-        # 503 Service Unavailable
-        if status_code == 503:
+
+        if error.code == 503:
             raise Stage0ConnectionError("Stage0 service temporarily unavailable")
-        
+
         # For other errors, return a DENY response with the error details
         # This allows the caller to inspect the error details
         return PolicyResponse(
             verdict="DENY",
-            reason=f"HTTP {status_code}: {error.reason}",
+            reason=f"HTTP {error.code}: {detail}",
             raw_response=error_data,
             request_id=request_id,
             issues=[{
                 "code": "HTTP_ERROR",
                 "severity": "HIGH",
-                "message": f"HTTP {status_code}: {error.reason}",
+                "message": f"HTTP {error.code}: {detail}",
             }],
         )
+
+    def _raise_http_error(self, error: urllib.error.HTTPError) -> None:
+        """Raise SDK exceptions for HTTP errors returned by non-policy endpoints."""
+        error_data, request_id = self._parse_error_response(error)
+        detail = self._get_error_detail(error_data, error.reason)
+
+        if error.code == 401:
+            raise InvalidApiKeyError(request_id)
+
+        if error.code == 402:
+            if "quota" in detail.lower():
+                raise QuotaExceededError(request_id=request_id)
+            raise ProPlanRequiredError(message=detail, request_id=request_id)
+
+        if error.code == 429:
+            retry_after = error_data.get("retry_after_seconds")
+            raise RateLimitedError(
+                retry_after_seconds=retry_after,
+                request_id=request_id,
+            )
+
+        if error.code == 503:
+            raise Stage0ConnectionError("Stage0 service temporarily unavailable")
+
+        raise Stage0ConnectionError(f"HTTP {error.code}: {detail}")
+
+    def _parse_error_response(
+        self,
+        error: urllib.error.HTTPError,
+    ) -> tuple[Dict[str, Any], Optional[str]]:
+        """Parse a JSON error response, preserving request_id when present."""
+        request_id = None
+        error_data: Dict[str, Any] = {}
+
+        try:
+            body = error.read().decode("utf-8")
+            error_data = json.loads(body)
+            raw_request_id = error_data.get("request_id")
+            request_id = str(raw_request_id) if raw_request_id is not None else None
+        except Exception:
+            pass
+
+        return error_data, request_id
+
+    def _get_error_detail(self, error_data: Dict[str, Any], fallback: str) -> str:
+        """Extract a stable error detail string from an API error payload."""
+        detail = error_data.get("detail", fallback)
+        if isinstance(detail, dict):
+            nested = detail.get("detail")
+            if nested is not None:
+                return str(nested)
+        return str(detail)
 
 
 # Module-level client instance for convenience
