@@ -40,7 +40,7 @@ pip install .
 pip install ".[dotenv]"
 ```
 
-**Do not install from `main` branch directly in production.** Always pin to a tag or commit hash.
+**Do not install from `main` branch directly in production.** Always pin to a specific tag version.
 
 ## Setup
 
