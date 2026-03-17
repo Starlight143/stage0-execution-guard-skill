@@ -36,7 +36,7 @@ pip install "stage0-execution-guard[dotenv] @ git+https://github.com/Starlight14
 Pin to a specific commit for exact reproducibility:
 
 ```bash
-pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@96d740d"
+pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@8dce413"
 ```
 
 ### From Local Clone

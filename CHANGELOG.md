@@ -5,27 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.4] - 2025-03-15
+## [1.2.4] - 2026-03-17
 
 ### Added
 - Usage API contract aligned with Stage0 runtime (`plan`, `monthly_remaining`, `daily_remaining`, `minute_remaining`)
 - `raw_response` field preserved for debugging and forward compatibility
+- CHANGELOG.md for version tracking
+- GitHub issue templates (bug report, feature request, question)
+- Version-pinned installation instructions in README
 
 ### Changed
 - Client tolerates additive fields in API responses without breaking
 
-## [1.2.1] - 2025-03-14
+## [1.2.1] - 2026-02-16
 
 ### Fixed
 - Cloudflare 403 error by adding `User-Agent` header to all HTTP requests
 
-## [1.2.0] - 2025-03-13
+## [1.2.0] - 2026-02-16
 
 ### Added
 - `.env` file auto-loading support via `python-dotenv` (optional dependency)
 - `[dotenv]` extra for users who want automatic environment loading
 
-## [1.1.0] - 2025-03-12
+## [1.1.0] - 2026-02-16
 
 ### Added
 - Pro plan handling with `pro=True` flag in `ExecutionIntent`
@@ -35,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Improved error messages for quota exceeded and authorization failures
 
-## [1.0.0] - 2025-03-11
+## [1.0.0] - 2026-02-16
 
 ### Added
 - Initial release
@@ -60,7 +63,7 @@ pip install "stage0-execution-guard[dotenv] @ git+https://github.com/Starlight14
 ### From Commit Hash
 
 ```bash
-pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@96d740d"
+pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@8dce413"
 ```
 
 ### From Local Clone
