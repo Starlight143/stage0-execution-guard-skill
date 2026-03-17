@@ -22,19 +22,33 @@ The package also supports local enforcement rules on top of the API response:
 
 This package is not currently published on PyPI. Do not use `pip install stage0-execution-guard`.
 
-Install from GitHub:
+### From Git Tag (Recommended)
+
+Pin to a specific version for reproducible builds:
 
 ```bash
-pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git"
-pip install "stage0-execution-guard[dotenv] @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git"
+pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@v1.2.4"
+pip install "stage0-execution-guard[dotenv] @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@v1.2.4"
 ```
 
-Or install from a local clone:
+### From Commit Hash
+
+Pin to a specific commit for exact reproducibility:
 
 ```bash
+pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@96d740d"
+```
+
+### From Local Clone
+
+```bash
+git clone https://github.com/Starlight143/stage0-execution-guard-skill.git
+cd stage0-execution-guard-skill
 pip install .
 pip install ".[dotenv]"
 ```
+
+**Do not install from `main` branch directly in production.** Always pin to a tag or commit hash.
 
 ## Setup
 
