@@ -60,12 +60,6 @@ pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0
 pip install "stage0-execution-guard[dotenv] @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@v1.2.4"
 ```
 
-### From Commit Hash
-
-```bash
-pip install "stage0-execution-guard @ git+https://github.com/Starlight143/stage0-execution-guard-skill.git@8dce413"
-```
-
 ### From Local Clone
 
 ```bash
